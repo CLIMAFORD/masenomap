@@ -14,12 +14,46 @@
         <link rel="stylesheet" href="css/leaflet-search.css">
         <link rel="stylesheet" href="css/leaflet.photon.css">
         <link rel="stylesheet" href="css/leaflet-measure.css">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css">
         <style>
         html, body, #map {
             width: 100%;
             height: 100%;
             padding: 0;
             margin: 0;
+        }
+        .leaflet-routing-container {
+            font-size: 13px;
+        }
+        .routing-panel input {
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 2px;
+            margin-bottom: 4px;
+            padding: 4px 6px;
+        }
+        .routing-panel label {
+            display: block;
+            margin-top: 6px;
+            font-size: 12px;
+            color: #333;
+        }
+        .routing-panel button {
+            padding: 4px 8px;
+            font-size: 12px;
+            margin-right: 4px;
+            cursor: pointer;
+        }
+        .routing-status {
+            font-size: 11px;
+            color: #333;
+            margin-top: 4px;
+            line-height: 1.2;
+        }
+        .search-nav-btn {
+            border: 1px solid rgba(0,0,0,0.15);
+            background: rgba(255,255,255,0.9);
+            border-radius: 3px;
         }
         </style>
         <title>Maseno University Facility Access</title>
@@ -29,6 +63,7 @@
         </div>
         <script src="js/qgis2web_expressions.js"></script>
         <script src="js/leaflet.js"></script>
+        <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
         <script src="js/L.Control.Layers.Tree.min.js"></script>
         <script src="js/L.Control.Locate.min.js"></script>
         <script src="js/leaflet.rotatedMarker.js"></script>
@@ -803,11 +838,301 @@
         });
         lay.addTo(map);
         setBounds();
-        map.addControl(new L.Control.Search({
-            layer: layer_Buildings_8,
+
+        var searchItems = [];
+        function addLayerSearchItems(layer, layerName) {
+            layer.eachLayer(function(featureLayer) {
+                if (!featureLayer.feature || !featureLayer.feature.properties) {
+                    return;
+                }
+                var props = featureLayer.feature.properties;
+                var loc;
+                if (featureLayer.getLatLng) {
+                    loc = featureLayer.getLatLng();
+                } else if (featureLayer.getBounds) {
+                    loc = featureLayer.getBounds().getCenter();
+                }
+                if (!loc) {
+                    return;
+                }
+                var values = [];
+                Object.keys(props).forEach(function(key) {
+                    var value = props[key];
+                    if (value !== null && value !== undefined && value !== '') {
+                        values.push(key + ': ' + value);
+                    }
+                });
+                var label = layerName;
+                if (props.Name) {
+                    label += ' | ' + props.Name;
+                } else if (props.name) {
+                    label += ' | ' + props.name;
+                } else if (props.id) {
+                    label += ' | ' + props.id;
+                }
+                var searchText = layerName + ' | ' + values.join(' | ');
+                searchItems.push({
+                    label: label,
+                    searchText: searchText,
+                    loc: loc,
+                    layer: featureLayer
+                });
+            });
+        }
+        addLayerSearchItems(layer_Buildings_8, 'Buildings');
+        addLayerSearchItems(layer_Trees_9, 'Trees');
+        addLayerSearchItems(layer_Roads_10, 'Roads');
+        addLayerSearchItems(layer_Amenity_7, 'Amenity');
+        addLayerSearchItems(layer_Flowers_6, 'Flowers');
+        addLayerSearchItems(layer_Field_5, 'Field');
+        addLayerSearchItems(layer_Farm_4, 'Farm');
+        addLayerSearchItems(layer_Parking_3, 'Parking');
+        addLayerSearchItems(layer_Grass_2, 'Grass');
+        addLayerSearchItems(layer_BareGround_1, 'Bare Ground');
+
+        function formatSearchData(data) {
+            var results = {};
+            data.forEach(function(item, index) {
+                var key = item.label || ('Feature ' + (index + 1));
+                if (results.hasOwnProperty(key)) {
+                    key = key + ' [' + (index + 1) + ']';
+                }
+                var latlng = item.loc instanceof L.LatLng ? item.loc : L.latLng(item.loc);
+                latlng._searchText = item.searchText || key;
+                latlng.layer = item.layer;
+                results[key] = latlng;
+            });
+            return results;
+        }
+
+        function filterSearchData(text, records) {
+            text = text.replace(/[.*+?^${}()|[\]\\]/g, '');
+            if (text === '') {
+                return {};
+            }
+            var regexp = new RegExp(text, 'i');
+            var filtered = {};
+            for (var key in records) {
+                if (!records.hasOwnProperty(key)) {
+                    continue;
+                }
+                var record = records[key];
+                if (regexp.test(key) || (record._searchText && regexp.test(record._searchText))) {
+                    filtered[key] = record;
+                }
+            }
+            return filtered;
+        }
+
+        var searchControl = new L.Control.Search({
             initial: false,
             hideMarkerOnCollapse: true,
-            propertyName: 'Name'}));
+            sourceData: function(text, callResponse) {
+                callResponse(searchItems);
+            },
+            formatData: formatSearchData,
+            filterData: filterSearchData,
+            moveToLocation: function(latlng, title, map) {
+                map.setView(latlng, 17);
+                if (latlng.layer && latlng.layer.openPopup) {
+                    latlng.layer.openPopup();
+                }
+            },
+            buildTip: function(text, val) {
+                return '<div style="white-space:normal;max-width:280px;">' + text + '</div>';
+            },
+            textPlaceholder: 'Search all attributes...',
+            minLength: 1,
+            autoType: false,
+            collapsed: false,
+            zoom: 17
+        });
+        map.addControl(searchControl);
+
+        var routeControl = null;
+        function setRouteStatus(text) {
+            var status = document.getElementById('route-status');
+            if (status) {
+                status.innerHTML = text;
+            }
+        }
+
+        function findFeatureByText(text) {
+            var escaped = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            var matcher = new RegExp(escaped, 'i');
+            return searchItems.find(function(item) {
+                return matcher.test(item.searchText) || matcher.test(item.label);
+            });
+        }
+
+        function parseRouteEndpoint(text) {
+            return new Promise(function(resolve, reject) {
+                if (!text) {
+                    return reject('Please provide coordinates, a feature attribute, or "My location".');
+                }
+                var value = text.trim();
+                if (value.toLowerCase() === 'my location' || value.toLowerCase() === 'me') {
+                    if (!navigator.geolocation) {
+                        return reject('Geolocation is not supported by this browser.');
+                    }
+                    navigator.geolocation.getCurrentPosition(function(position) {
+                        resolve(L.latLng(position.coords.latitude, position.coords.longitude));
+                    }, function() {
+                        reject('Unable to determine your location.');
+                    });
+                    return;
+                }
+
+                var coordMatch = value.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+                if (coordMatch) {
+                    resolve(L.latLng(parseFloat(coordMatch[1]), parseFloat(coordMatch[2])));
+                    return;
+                }
+
+                var feature = findFeatureByText(value);
+                if (feature) {
+                    resolve(feature.loc);
+                    return;
+                }
+                reject('No matching attribute or coordinates found for: ' + value);
+            });
+        }
+
+        function createRoutingPanel() {
+            var routingPanel = L.control({position: 'topright'});
+            routingPanel.onAdd = function(map) {
+                var container = L.DomUtil.create('div', 'routing-panel leaflet-bar');
+                container.innerHTML =
+                    '<label for="route-start">Route start</label>' +
+                    '<input id="route-start" placeholder="Coordinates, attribute, or My location">' +
+                    '<label for="route-end">Route end</label>' +
+                    '<input id="route-end" placeholder="Coordinates or attribute">' +
+                    '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
+                        '<button id="route-my-location" type="button">My location</button>' +
+                        '<button id="route-go" type="button">Route</button>' +
+                        '<button id="route-clear" type="button">Clear</button>' +
+                    '</div>' +
+                    '<div id="route-status" class="routing-status">Enter text and click Route.</div>';
+                L.DomEvent.disableClickPropagation(container);
+                L.DomEvent.disableScrollPropagation(container);
+                return container;
+            };
+            routingPanel.addTo(map);
+            var startInput = document.getElementById('route-start');
+            var endInput = document.getElementById('route-end');
+            var statusText = document.getElementById('route-status');
+
+            document.getElementById('route-my-location').addEventListener('click', function() {
+                if (!startInput || !endInput) return;
+                startInput.value = 'My location';
+                setRouteStatus('Start set to your current location. Click Route to continue.');
+            });
+            document.getElementById('route-go').addEventListener('click', function() {
+                if (!startInput || !endInput) return;
+                setRouteStatus('Computing route…');
+                Promise.all([parseRouteEndpoint(startInput.value), parseRouteEndpoint(endInput.value)])
+                    .then(function(results) {
+                        var start = results[0];
+                        var end = results[1];
+                        if (routeControl) {
+                            routeControl.setWaypoints([start, end]);
+                        } else {
+                            routeControl = L.Routing.control({
+                                waypoints: [start, end],
+                                routeWhileDragging: false,
+                                showAlternatives: false,
+                                geocoder: false,
+                                fitSelectedRoute: true,
+                                lineOptions: {styles: [{color: 'blue', opacity: 0.7, weight: 4}]}
+                            }).addTo(map);
+                        }
+                        setRouteStatus('Route displayed. Use Next/Prev to navigate results or Clear to reset.');
+                    })
+                    .catch(function(error) {
+                        setRouteStatus(error);
+                    });
+            });
+            document.getElementById('route-clear').addEventListener('click', function() {
+                if (routeControl) {
+                    map.removeControl(routeControl);
+                    routeControl = null;
+                }
+                startInput.value = '';
+                endInput.value = '';
+                setRouteStatus('Route cleared. Enter a new route.');
+            });
+        }
+
+        createRoutingPanel();
+
+        function moveSearchSelection(control, step) {
+            if (!control._tooltip || control._tooltip.style.display === 'none') return;
+            var items = control._tooltip.childNodes;
+            if (!items || items.length === 0) return;
+            var current = typeof control._tooltip.currentSelection === 'number' ? control._tooltip.currentSelection : -1;
+            var nextIndex = (current + step + items.length) % items.length;
+            for (var i = 0; i < items.length; i++) {
+                L.DomUtil.removeClass(items[i], 'search-tip-select');
+            }
+            control._tooltip.currentSelection = nextIndex;
+            var selected = items[nextIndex];
+            L.DomUtil.addClass(selected, 'search-tip-select');
+            control._input.value = selected._text;
+            var record = control._recordsCache && control._recordsCache[selected._text];
+            if (record) {
+                control.showLocation(record, selected._text);
+            }
+            var top = selected.offsetTop;
+            var bottom = top + selected.clientHeight;
+            if (top < control._tooltip.scrollTop) {
+                control._tooltip.scrollTop = top;
+            } else if (bottom > control._tooltip.scrollTop + control._tooltip.clientHeight) {
+                control._tooltip.scrollTop = bottom - control._tooltip.clientHeight;
+            }
+        }
+
+        var searchNav = L.DomUtil.create('div', 'search-nav', searchControl._container);
+        searchNav.style.display = 'flex';
+        searchNav.style.alignItems = 'center';
+        searchNav.style.justifyContent = 'space-between';
+        searchNav.style.marginTop = '4px';
+
+        var prevButton = L.DomUtil.create('a', 'search-nav-btn', searchNav);
+        prevButton.href = '#';
+        prevButton.title = 'Previous result';
+        prevButton.innerHTML = '&#9664;';
+        prevButton.style.padding = '0 8px';
+        prevButton.style.cursor = 'pointer';
+        prevButton.style.display = 'inline-flex';
+        prevButton.style.alignItems = 'center';
+        prevButton.style.justifyContent = 'center';
+        prevButton.style.color = '#333';
+        prevButton.style.textDecoration = 'none';
+        prevButton.style.fontSize = '14px';
+        L.DomEvent.on(prevButton, 'click', L.DomEvent.stopPropagation)
+            .on(prevButton, 'click', L.DomEvent.preventDefault)
+            .on(prevButton, 'click', function () {
+                moveSearchSelection(searchControl, -1);
+            });
+
+        var nextButton = L.DomUtil.create('a', 'search-nav-btn', searchNav);
+        nextButton.href = '#';
+        nextButton.title = 'Next result';
+        nextButton.innerHTML = '&#9654;';
+        nextButton.style.padding = '0 8px';
+        nextButton.style.cursor = 'pointer';
+        nextButton.style.display = 'inline-flex';
+        nextButton.style.alignItems = 'center';
+        nextButton.style.justifyContent = 'center';
+        nextButton.style.color = '#333';
+        nextButton.style.textDecoration = 'none';
+        nextButton.style.fontSize = '14px';
+        L.DomEvent.on(nextButton, 'click', L.DomEvent.stopPropagation)
+            .on(nextButton, 'click', L.DomEvent.preventDefault)
+            .on(nextButton, 'click', function () {
+                moveSearchSelection(searchControl, 1);
+            });
+
         if (typeof url === 'undefined') {
             document.getElementsByClassName('search-button')[0].className += ' fa fa-binoculars';
         } else {

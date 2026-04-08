@@ -21,43 +21,53 @@
             height: 100%;
             padding: 0;
             margin: 0;
-            font-size: 16px;
+        }
+        .leaflet-control, .leaflet-bar, .leaflet-control * {
+            font-size: 14px !important;
+        }
+        .leaflet-bar a, .leaflet-bar button, .leaflet-control a, .leaflet-control button {
+            min-width: 34px;
+            min-height: 34px;
+            line-height: 32px;
+        }
+        .leaflet-control-search input {
+            font-size: 14px !important;
+            padding: 6px !important;
+            height: 32px !important;
+        }
+        .leaflet-control-search .search-button {
+            width: 34px !important;
+            height: 34px !important;
+            line-height: 32px !important;
+            font-size: 16px !important;
         }
         .leaflet-routing-container {
-            font-size: 15px;
+            font-size: 14px;
         }
-        .routing-panel input,
-        .issues-panel input,
-        .issues-panel textarea,
-        .issues-panel select,
-        .leaflet-control-search input {
+        .routing-panel input {
             width: 100%;
             box-sizing: border-box;
             margin-top: 4px;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             padding: 8px 10px;
-            font-size: 15px;
-            min-height: 38px;
+            font-size: 14px;
+            min-height: 34px;
         }
-        .routing-panel label,
-        .issues-panel label,
-        .leaflet-control-search label {
+        .routing-panel label {
             display: block;
             margin-top: 8px;
-            font-size: 15px;
+            font-size: 13px;
             color: #333;
         }
-        .routing-panel button,
-        .issues-panel button,
-        .leaflet-control-search .search-button {
-            padding: 8px 12px;
-            font-size: 15px;
-            margin-right: 6px;
-            cursor: pointer;
-        }
-        .routing-status,
-        .issue-status {
+        .routing-panel button {
+            padding: 6px 10px;
             font-size: 14px;
+            margin-right: 4px;
+            cursor: pointer;
+            min-height: 36px;
+        }
+        .routing-status {
+            font-size: 13px;
             color: #333;
             margin-top: 6px;
             line-height: 1.4;
@@ -65,27 +75,16 @@
         .search-nav-btn {
             border: 1px solid rgba(0,0,0,0.15);
             background: rgba(255,255,255,0.95);
-            border-radius: 3px;
-            padding: 6px 10px;
-            font-size: 15px;
+            border-radius: 4px;
+            min-width: 36px;
+            min-height: 36px;
+            line-height: 32px;
+            font-size: 16px;
         }
-        .issues-panel textarea {
-            resize: vertical;
-            min-height: 90px;
-        }
-        .issues-panel label input {
-            margin-right: 6px;
-        }
-        .leaflet-control a,
-        .leaflet-control button,
-        .leaflet-control input {
-            font-size: 15px;
-        }
-        .leaflet-control .leaflet-control-layers-toggle,
-        .leaflet-control .leaflet-control-zoom-in,
-        .leaflet-control .leaflet-control-zoom-out {
-            width: 36px;
-            height: 36px;
+        .leaflet-control-layers-toggle, .leaflet-control-locate a, .leaflet-control-measure-toggle {
+            width: 34px !important;
+            height: 34px !important;
+            line-height: 34px !important;
         }
         </style>
         <title>Maseno University Facility Access</title>
@@ -95,8 +94,6 @@
         </div>
         <script src="js/qgis2web_expressions.js"></script>
         <script src="js/leaflet.js"></script>
-        <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-        <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
         <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
         <script src="js/L.Control.Layers.Tree.min.js"></script>
         <script src="js/L.Control.Locate.min.js"></script>
@@ -120,21 +117,7 @@
         <script src="data/Buildings_8.js"></script>
         <script src="data/Trees_9.js"></script>
         <script src="data/Roads_10.js"></script>
-        <script src="js/firebaseConfig.js"></script>
         <script>
-        var firebaseEnabled = false;
-        function initFirebase() {
-            if (!firebaseConfig || !firebaseConfig.apiKey) {
-                return;
-            }
-            try {
-                firebase.initializeApp(firebaseConfig);
-                firebaseEnabled = true;
-            } catch (err) {
-                console.error('Firebase init error:', err);
-            }
-        }
-        initFirebase();
         var map = L.map('map', {
             zoomControl:false, maxZoom:28, minZoom:1
         })
@@ -245,173 +228,6 @@
         });
         layer_OSMStandard_0;
         map.addLayer(layer_OSMStandard_0);
-        var issueMarkers = L.layerGroup().addTo(map);
-        var issueVisibility = true;
-        var issueSavedLocation = null;
-
-        function issueMarkerColor(status) {
-            if (status === 'resolved') return 'green';
-            if (status === 'in progress') return 'yellow';
-            return 'red';
-        }
-
-        function setIssueStatus(text) {
-            var status = document.getElementById('issue-status');
-            if (status) {
-                status.innerHTML = text;
-            }
-        }
-
-        function toggleIssueMarkers(show) {
-            issueVisibility = show;
-            if (show) {
-                issueMarkers.addTo(map);
-            } else {
-                map.removeLayer(issueMarkers);
-            }
-        }
-
-        function createIssueMarker(issue) {
-            var marker = L.circleMarker([issue.lat, issue.lng], {
-                radius: 8,
-                fillColor: issueMarkerColor(issue.status),
-                color: '#000',
-                weight: 1,
-                fillOpacity: 0.9,
-                pane: 'pane_OSMStandard_0'
-            });
-            marker.bindPopup('<strong>Status:</strong> ' + issue.status + '<br><strong>Description:</strong> ' + (issue.description || 'No description') + '<br><strong>Reported:</strong> ' + new Date(issue.createdAt).toLocaleString());
-            return marker;
-        }
-
-        function refreshIssueMarkers(issues) {
-            issueMarkers.clearLayers();
-            if (!issues || !issueVisibility) {
-                return;
-            }
-            Object.keys(issues).forEach(function(key) {
-                var issue = issues[key];
-                if (issue.lat != null && issue.lng != null) {
-                    createIssueMarker(issue).addTo(issueMarkers);
-                }
-            });
-        }
-
-        function startIssueWatcher() {
-            if (!firebaseEnabled) {
-                setIssueStatus('Firebase not configured. Fill firebaseConfig with your project details.');
-                return;
-            }
-            var issuesRef = firebase.database().ref('issues');
-            issuesRef.on('value', function(snapshot) {
-                refreshIssueMarkers(snapshot.val());
-                setIssueStatus('Loaded issue markers.');
-            }, function(error) {
-                setIssueStatus('Firebase read failed: ' + error.message);
-            });
-        }
-
-        function saveIssue(issue) {
-            if (!firebaseEnabled) {
-                setIssueStatus('Firebase not configured. Fill firebaseConfig with your project details.');
-                return;
-            }
-            var issuesRef = firebase.database().ref('issues');
-            issue.createdAt = Date.now();
-            issuesRef.push(issue, function(error) {
-                if (error) {
-                    setIssueStatus('Issue saving failed: ' + error.message);
-                } else {
-                    setIssueStatus('Issue reported successfully.');
-                }
-            });
-        }
-
-        function resolveIssueLocation(callback) {
-            if (issueSavedLocation) {
-                callback(issueSavedLocation);
-                return;
-            }
-            if (!navigator.geolocation) {
-                setIssueStatus('Geolocation not supported by this browser.');
-                return;
-            }
-            setIssueStatus('Recording issue at current device location...');
-            navigator.geolocation.getCurrentPosition(function(position) {
-                issueSavedLocation = L.latLng(position.coords.latitude, position.coords.longitude);
-                callback(issueSavedLocation);
-            }, function() {
-                setIssueStatus('Unable to determine your location.');
-            });
-        }
-
-        function createIssuesPanel() {
-            var issuesPanel = L.control({position: 'bottomright'});
-            issuesPanel.onAdd = function(map) {
-                var container = L.DomUtil.create('div', 'issues-panel leaflet-bar');
-                container.innerHTML =
-                    '<label for="issue-text">Issue description</label>' +
-                    '<textarea id="issue-text" placeholder="Describe the issue..."></textarea>' +
-                    '<label for="issue-status-select">Issue status</label>' +
-                    '<select id="issue-status-select">' +
-                        '<option value="new">New</option>' +
-                        '<option value="in progress">In progress</option>' +
-                        '<option value="resolved">Resolved</option>' +
-                    '</select>' +
-                    '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
-                        '<button id="issue-location" type="button">Use my location</button>' +
-                        '<button id="issue-report" type="button">Report issue</button>' +
-                        '<button id="issue-clear" type="button">Clear</button>' +
-                    '</div>' +
-                    '<label><input type="checkbox" id="issues-visible" checked> Show issue markers</label>' +
-                    '<div id="issue-status" class="issue-status">Report map issues from your device location.</div>';
-                L.DomEvent.disableClickPropagation(container);
-                L.DomEvent.disableScrollPropagation(container);
-                return container;
-            };
-            issuesPanel.addTo(map);
-
-            function updateCheckbox() {
-                var toggle = document.getElementById('issues-visible');
-                toggleIssueMarkers(toggle.checked);
-            }
-
-            document.getElementById('issue-location').addEventListener('click', function() {
-                resolveIssueLocation(function(latlng) {
-                    setIssueStatus('Location set: ' + latlng.lat.toFixed(5) + ', ' + latlng.lng.toFixed(5));
-                });
-            });
-
-            document.getElementById('issue-report').addEventListener('click', function() {
-                var description = document.getElementById('issue-text').value.trim();
-                var status = document.getElementById('issue-status-select').value;
-                if (!description) {
-                    setIssueStatus('Please enter an issue description.');
-                    return;
-                }
-                resolveIssueLocation(function(latlng) {
-                    saveIssue({
-                        description: description,
-                        status: status,
-                        lat: latlng.lat,
-                        lng: latlng.lng
-                    });
-                });
-            });
-
-            document.getElementById('issue-clear').addEventListener('click', function() {
-                document.getElementById('issue-text').value = '';
-                document.getElementById('issue-status-select').value = 'new';
-                issueSavedLocation = null;
-                setIssueStatus('Issue form cleared.');
-            });
-
-            document.getElementById('issues-visible').addEventListener('change', updateCheckbox);
-        }
-
-        createIssuesPanel();
-        startIssueWatcher();
-
         function pop_BareGround_1(feature, layer) {
             var popupContent = '<table>\
                     <tr>\

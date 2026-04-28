@@ -243,13 +243,13 @@
                 return null;
             }
         }
-        // Load interior/exterior images from Supabase for a facility
+
         async function loadFacilityImages(facilityId) {
             if (!supabaseClient || !facilityId) return { interior: null, exterior: null };
             try {
                 var response = await supabaseClient
                     .from('bld_images')
-                    .select('facility_id,interior_image_url,exterior_image_url,image_url,image,link')
+                    .select('facility_id,interior_image_url,exterior_image_url')
                     .eq('facility_id', facilityId)
                     .single();
                 if (response.error) {
@@ -257,9 +257,10 @@
                     return { interior: null, exterior: null };
                 }
                 var row = response.data || {};
-                var interior = row.interior_image_url || row.image_url || row.image || null;
-                var exterior = row.exterior_image_url || row.link || null;
-                return { interior: interior, exterior: exterior };
+                return {
+                    interior: row.interior_image_url || null,
+                    exterior: row.exterior_image_url || null
+                };
             } catch (error) {
                 console.warn('Failed to load facility images from Supabase:', error);
                 return { interior: null, exterior: null };
@@ -269,70 +270,65 @@
         async function addFacilityImageToPopup(feature, content, popup) {
             if (!feature || !feature.properties || !popup) return;
             var props = feature.properties || {};
-            var newBld = props.new_bld_id || props.new_bldid || props.newBldId;
-            var lookupKey = newBld || props.id || props.ID || null;
+            var isBuilding = !!(props.new_bld_id || props.new_bldid || props.newBldId);
+            var lookupKey = props.new_bld_id || props.new_bldid || props.newBldId || props.id || props.ID || props.facility_id || props.FACILITY_ID || null;
 
-            var candidates = {
-                interior: props.interior_image_url || props.interior || props.Photo || props.photo || null,
-                exterior: props.exterior_image_url || props.exterior || null
-            };
-
-            var supa = { interior: null, exterior: null };
-            try {
-                if (lookupKey && typeof supabaseClient !== 'undefined' && supabaseClient) {
-                    supa = await loadFacilityImages(lookupKey);
-                }
-            } catch (e) {
-                console.warn('Supabase multi-image lookup failed:', e);
-            }
-
-            var interiorUrl = supa.interior || candidates.interior || null;
-            var exteriorUrl = supa.exterior || candidates.exterior || null;
-
-            if (!interiorUrl && !exteriorUrl) return;
-
-            console.info('Facility images resolved', {lookup: lookupKey, interior: interiorUrl, exterior: exteriorUrl});
-
-            function resolveLocal(v) {
-                if (!v) return null;
-                if (/^https?:\/\//i.test(v)) return v;
-                if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v)) return 'images/' + v;
+            function resolveLocal(value) {
+                if (!value) return null;
+                if (/^https?:\/\//i.test(value)) return value;
+                if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(value)) return 'images/' + value;
                 return null;
             }
 
-            interiorUrl = resolveLocal(interiorUrl);
-            exteriorUrl = resolveLocal(exteriorUrl);
-
-            var parts = [];
-            function attachIfLoads(label, url, cb) {
-                if (!url) return cb && cb(false);
-                var img = new Image();
-                img.onload = function() { cb && cb(true, url, label); };
-                img.onerror = function() { console.warn('Image failed to load for', label, url); cb && cb(false); };
-                img.src = url;
+            function addCandidate(candidates, label, value) {
+                if (!value) return;
+                var url = resolveLocal(value);
+                if (url && candidates.indexOf(url) === -1) {
+                    candidates.push({label: label, url: url});
+                }
             }
 
-            var attached = false;
-            attachIfLoads('Interior', interiorUrl, function(ok, url, label) {
-                if (ok) {
-                    parts.push('<div style="margin-top:10px;text-align:center;"><div style="font-size:12px;color:#666;margin-bottom:6px;">Interior</div><img src="'+url+'" alt="'+label+'" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" /></div>');
-                    attached = true;
+            var images = [];
+            if (isBuilding && lookupKey) {
+                try {
+                    var row = await loadFacilityImages(lookupKey);
+                    addCandidate(images, 'Interior', row.interior);
+                    addCandidate(images, 'Exterior', row.exterior);
+                } catch (e) {
+                    console.warn('Failed loading building images:', e);
                 }
-                attachIfLoads('Exterior', exteriorUrl, function(ok2, url2, label2) {
-                    if (ok2) {
-                        parts.push('<div style="margin-top:10px;text-align:center;"><div style="font-size:12px;color:#666;margin-bottom:6px;">Exterior</div><img src="'+url2+'" alt="'+label2+'" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" /></div>');
-                        attached = true;
-                    }
-                    if (attached) {
-                        try {
-                            popup.setContent(content + parts.join('\n'));
-                            popup.update();
-                        } catch (e) {
-                            console.warn('Failed to set popup content with images:', e);
-                        }
-                    }
-                });
-            });
+            }
+
+            if (!isBuilding) {
+                addCandidate(images, 'Image', props.Photo);
+                addCandidate(images, 'Image', props.image);
+                addCandidate(images, 'Image', props.image_url);
+            }
+
+            if (images.length === 0 && lookupKey) {
+                try {
+                    var fallback = await loadFacilityImage(lookupKey);
+                    addCandidate(images, isBuilding ? 'Image' : 'Image', fallback);
+                } catch (e) {
+                    console.warn('Fallback image lookup failed:', e);
+                }
+            }
+
+            if (images.length === 0) return;
+
+            var html = images.map(function(item) {
+                return '<div style="margin-top:10px;text-align:center;">' +
+                    '<div style="font-size:12px;color:#666;margin-bottom:6px;">' + item.label + '</div>' +
+                    '<img src="' + item.url + '" alt="' + item.label + ' image" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
+                    '</div>';
+            }).join('');
+
+            try {
+                popup.setContent(content + html);
+                popup.update();
+            } catch (e) {
+                console.warn('Failed to attach popup images:', e);
+            }
         }
         // Load issue markers from Firebase
         function loadIssues() {
@@ -891,8 +887,8 @@
                 lineJoin: 'miter',
                 weight: 1.0, 
                 fill: true,
-                fillOpacity: 1,
-                fillColor: 'rgba(250,249,251,1.0)',
+                fillOpacity: 0.65,
+                fillColor: 'rgba(180,180,180,0.8)',
                 interactive: true,
             }
         }

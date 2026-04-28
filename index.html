@@ -102,7 +102,6 @@
     <body>
         <div id="map">
         </div>
-        <script src="js/qgis2web_expressions.js"></script>
         <script src="js/leaflet.js"></script>
         <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
         <script src="js/L.Control.Layers.Tree.min.js"></script>
@@ -129,7 +128,7 @@
         <script src="data/Parking_3.js"></script>
         <script src="data/Farm_4.js"></script>
         <script src="data/Field_5.js"></script>
-        <script src="data/Flowers_6.js"></script>
+        
         <script src="data/Amenity_7.js"></script>
         <script src="data/Buildings_8.js"></script>
         <script src="data/Trees_9.js"></script>
@@ -244,66 +243,96 @@
                 return null;
             }
         }
+        // Load interior/exterior images from Supabase for a facility
+        async function loadFacilityImages(facilityId) {
+            if (!supabaseClient || !facilityId) return { interior: null, exterior: null };
+            try {
+                var response = await supabaseClient
+                    .from('bld_images')
+                    .select('facility_id,interior_image_url,exterior_image_url,image_url,image,link')
+                    .eq('facility_id', facilityId)
+                    .single();
+                if (response.error) {
+                    console.warn('Supabase image query error:', response.error);
+                    return { interior: null, exterior: null };
+                }
+                var row = response.data || {};
+                var interior = row.interior_image_url || row.image_url || row.image || null;
+                var exterior = row.exterior_image_url || row.link || null;
+                return { interior: interior, exterior: exterior };
+            } catch (error) {
+                console.warn('Failed to load facility images from Supabase:', error);
+                return { interior: null, exterior: null };
+            }
+        }
+
         async function addFacilityImageToPopup(feature, content, popup) {
             if (!feature || !feature.properties || !popup) return;
-
-            // Try direct photo fields on the feature first
             var props = feature.properties || {};
-            var possible = [];
-            if (props.Photo) possible.push(props.Photo);
-            if (props.photo) possible.push(props.photo);
-            if (props.image) possible.push(props.image);
-            if (props.image_url) possible.push(props.image_url);
-
-            // If there's a new building id, prefer that as lookup key
             var newBld = props.new_bld_id || props.new_bldid || props.newBldId;
-            if (newBld) possible.push(newBld);
+            var lookupKey = newBld || props.id || props.ID || null;
 
-            // Also try id-like fields
-            if (props.id) possible.push(props.id);
-            if (props.ID) possible.push(props.ID);
+            var candidates = {
+                interior: props.interior_image_url || props.interior || props.Photo || props.photo || null,
+                exterior: props.exterior_image_url || props.exterior || null
+            };
 
-            var imageUrl = null;
-
-            // 1) If supabase is configured and we have a building key, try Supabase
+            var supa = { interior: null, exterior: null };
             try {
-                var lookupKey = newBld || props.id || props.ID || null;
                 if (lookupKey && typeof supabaseClient !== 'undefined' && supabaseClient) {
-                    imageUrl = await loadFacilityImage(lookupKey);
+                    supa = await loadFacilityImages(lookupKey);
                 }
             } catch (e) {
-                console.warn('Supabase lookup failed silently:', e);
+                console.warn('Supabase multi-image lookup failed:', e);
             }
 
-            // 2) If no supabase image, check direct properties for a URL or filename
-            if (!imageUrl) {
-                for (var i = 0; i < possible.length; i++) {
-                    var v = possible[i];
-                    if (!v) continue;
-                    // If looks like a URL, use it
-                    if (/^https?:\/\//i.test(v)) {
-                        imageUrl = v;
-                        break;
-                    }
-                    // If looks like a filename, try images/ folder
-                    if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v) || /^[0-9A-Za-z_\-]+$/.test(v)) {
-                        imageUrl = 'images/' + v;
-                        break;
-                    }
+            var interiorUrl = supa.interior || candidates.interior || null;
+            var exteriorUrl = supa.exterior || candidates.exterior || null;
+
+            if (!interiorUrl && !exteriorUrl) return;
+
+            console.info('Facility images resolved', {lookup: lookupKey, interior: interiorUrl, exterior: exteriorUrl});
+
+            function resolveLocal(v) {
+                if (!v) return null;
+                if (/^https?:\/\//i.test(v)) return v;
+                if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v)) return 'images/' + v;
+                return null;
+            }
+
+            interiorUrl = resolveLocal(interiorUrl);
+            exteriorUrl = resolveLocal(exteriorUrl);
+
+            var parts = [];
+            function attachIfLoads(label, url, cb) {
+                if (!url) return cb && cb(false);
+                var img = new Image();
+                img.onload = function() { cb && cb(true, url, label); };
+                img.onerror = function() { console.warn('Image failed to load for', label, url); cb && cb(false); };
+                img.src = url;
+            }
+
+            var attached = false;
+            attachIfLoads('Interior', interiorUrl, function(ok, url, label) {
+                if (ok) {
+                    parts.push('<div style="margin-top:10px;text-align:center;"><div style="font-size:12px;color:#666;margin-bottom:6px;">Interior</div><img src="'+url+'" alt="'+label+'" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" /></div>');
+                    attached = true;
                 }
-            }
-
-            if (!imageUrl) return;
-
-            var imgHtml = '<div style="margin-top:10px;text-align:center;">' +
-                          '<img src="' + imageUrl + '" alt="Facility image" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
-                          '</div>';
-            try {
-                popup.setContent(content + imgHtml);
-                popup.update();
-            } catch (e) {
-                console.warn('Failed to attach image to popup:', e);
-            }
+                attachIfLoads('Exterior', exteriorUrl, function(ok2, url2, label2) {
+                    if (ok2) {
+                        parts.push('<div style="margin-top:10px;text-align:center;"><div style="font-size:12px;color:#666;margin-bottom:6px;">Exterior</div><img src="'+url2+'" alt="'+label2+'" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" /></div>');
+                        attached = true;
+                    }
+                    if (attached) {
+                        try {
+                            popup.setContent(content + parts.join('\n'));
+                            popup.update();
+                        } catch (e) {
+                            console.warn('Failed to set popup content with images:', e);
+                        }
+                    }
+                });
+            });
         }
         // Load issue markers from Firebase
         function loadIssues() {

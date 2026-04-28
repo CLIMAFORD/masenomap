@@ -30,7 +30,7 @@ Simply open `index.html` in a modern web browser to view the map.
 ## Deployment
 
 This map is deployed on GitHub Pages. Visit the live version at:
-https://[username].github.io/masenomap/
+https://climaford.github.io/masenomap/
 
 ## License
 

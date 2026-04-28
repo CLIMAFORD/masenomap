@@ -244,24 +244,66 @@
                 return null;
             }
         }
-
         async function addFacilityImageToPopup(feature, content, popup) {
-            if (!feature || !feature.properties || !popup) {
-                return;
+            if (!feature || !feature.properties || !popup) return;
+
+            // Try direct photo fields on the feature first
+            var props = feature.properties || {};
+            var possible = [];
+            if (props.Photo) possible.push(props.Photo);
+            if (props.photo) possible.push(props.photo);
+            if (props.image) possible.push(props.image);
+            if (props.image_url) possible.push(props.image_url);
+
+            // If there's a new building id, prefer that as lookup key
+            var newBld = props.new_bld_id || props.new_bldid || props.newBldId;
+            if (newBld) possible.push(newBld);
+
+            // Also try id-like fields
+            if (props.id) possible.push(props.id);
+            if (props.ID) possible.push(props.ID);
+
+            var imageUrl = null;
+
+            // 1) If supabase is configured and we have a building key, try Supabase
+            try {
+                var lookupKey = newBld || props.id || props.ID || null;
+                if (lookupKey && typeof supabaseClient !== 'undefined' && supabaseClient) {
+                    imageUrl = await loadFacilityImage(lookupKey);
+                }
+            } catch (e) {
+                console.warn('Supabase lookup failed silently:', e);
             }
-            var facilityId = feature.properties.id || feature.properties.ID || feature.properties.facility_id || feature.properties.FACILITY_ID;
-            if (!facilityId) {
-                return;
-            }
-            var imageUrl = await loadFacilityImage(facilityId);
+
+            // 2) If no supabase image, check direct properties for a URL or filename
             if (!imageUrl) {
-                return;
+                for (var i = 0; i < possible.length; i++) {
+                    var v = possible[i];
+                    if (!v) continue;
+                    // If looks like a URL, use it
+                    if (/^https?:\/\//i.test(v)) {
+                        imageUrl = v;
+                        break;
+                    }
+                    // If looks like a filename, try images/ folder
+                    if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v) || /^[0-9A-Za-z_\-]+$/.test(v)) {
+                        imageUrl = 'images/' + v;
+                        break;
+                    }
+                }
             }
+
+            if (!imageUrl) return;
+
             var imgHtml = '<div style="margin-top:10px;text-align:center;">' +
                           '<img src="' + imageUrl + '" alt="Facility image" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
                           '</div>';
-            popup.setContent(content + imgHtml);
-            popup.update();
+            try {
+                popup.setContent(content + imgHtml);
+                popup.update();
+            } catch (e) {
+                console.warn('Failed to attach image to popup:', e);
+            }
         }
         // Load issue markers from Firebase
         function loadIssues() {
@@ -304,7 +346,13 @@
                         }
                     });
                     if (points.length > 0) {
-                        heatLayer = L.heatLayer(points, {radius: 25, blur: 15, maxZoom: 10}).addTo(map);
+                        if (points.length === 1) {
+                            // Single point: show a larger heat and a marker so it's visible
+                            heatLayer = L.heatLayer(points, {radius: 40, blur: 30, maxZoom: 18}).addTo(map);
+                            L.circleMarker(points[0], {radius: 12, color: '#ff5722', fillColor: '#ff8a50', fillOpacity:0.6}).addTo(map);
+                        } else {
+                            heatLayer = L.heatLayer(points, {radius: 25, blur: 15, maxZoom: 10}).addTo(map);
+                        }
                         heatmapVisible = true;
                     } else {
                         alert('No device locations available for heatmap.');
@@ -1556,9 +1604,96 @@
             setInterval(updateDeviceLocation, 5 * 60 * 1000);
         }
 
+        // Show a small banner prompting for location permission and provide a quick request button
+        function ensureLocationPermissionUI() {
+            if (!('geolocation' in navigator)) return;
+            // Check permission status if Permissions API available
+            if (navigator.permissions && navigator.permissions.query) {
+                navigator.permissions.query({name: 'geolocation'}).then(function(status) {
+                    if (status.state === 'denied') {
+                        showLocationBanner('Location permission denied. Enable location for full functionality.');
+                    } else if (status.state === 'prompt') {
+                        showLocationBanner('Location permission required. Click to allow.', true);
+                    }
+                }).catch(function() {
+                    // ignore
+                });
+            } else {
+                // Legacy: show prompt button
+                showLocationBanner('Location permission recommended. Click to allow.', true);
+            }
+        }
+
+        function showLocationBanner(message, showRequest) {
+            if (document.getElementById('location-banner')) return;
+            var b = document.createElement('div');
+            b.id = 'location-banner';
+            b.style.position = 'fixed';
+            b.style.left = '12px';
+            b.style.bottom = '12px';
+            b.style.zIndex = 10001;
+            b.style.background = 'rgba(0,0,0,0.7)';
+            b.style.color = '#fff';
+            b.style.padding = '10px 12px';
+            b.style.borderRadius = '8px';
+            b.style.fontSize = '13px';
+            b.style.maxWidth = '320px';
+            b.innerHTML = '<span>' + message + '</span>';
+            if (showRequest) {
+                var btn = document.createElement('button');
+                btn.textContent = 'Allow Location';
+                btn.style.marginLeft = '8px';
+                btn.style.padding = '6px 8px';
+                btn.style.border = 'none';
+                btn.style.borderRadius = '6px';
+                btn.style.cursor = 'pointer';
+                btn.addEventListener('click', function() {
+                    navigator.geolocation.getCurrentPosition(function() {
+                        var el = document.getElementById('location-banner');
+                        if (el) el.parentNode.removeChild(el);
+                    }, function() {
+                        alert('Location permission not granted. Some features will be limited.');
+                    });
+                });
+                b.appendChild(btn);
+            }
+            document.body.appendChild(b);
+        }
+
+        // If the report control is not visible (some CSS may hide it), add a fallback floating button
+        function ensureReportButtonVisible() {
+            // small delay to allow regular control to render
+            setTimeout(function() {
+                var existing = document.querySelector('.report-issue-control');
+                if (!existing || existing.getBoundingClientRect().width === 0) {
+                    if (document.getElementById('report-fallback-btn')) return;
+                    var fb = document.createElement('button');
+                    fb.id = 'report-fallback-btn';
+                    fb.textContent = 'Report';
+                    fb.title = 'Report issue';
+                    fb.style.position = 'fixed';
+                    fb.style.right = '14px';
+                    fb.style.bottom = '14px';
+                    fb.style.zIndex = 10000;
+                    fb.style.background = '#e91e63';
+                    fb.style.color = '#fff';
+                    fb.style.border = 'none';
+                    fb.style.padding = '10px 14px';
+                    fb.style.borderRadius = '28px';
+                    fb.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+                    fb.style.cursor = 'pointer';
+                    fb.addEventListener('click', function() { openReportPanel(); });
+                    document.body.appendChild(fb);
+                }
+            }, 600);
+        }
+
         initFirebase();
         loadIssues();
         initSupabase();
+        // Ensure location prompt and report button are visible
+        ensureLocationPermissionUI();
+        ensureReportButtonVisible();
         </script>        
     </body>
 </html>

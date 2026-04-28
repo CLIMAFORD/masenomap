@@ -102,6 +102,7 @@
     <body>
         <div id="map">
         </div>
+        <script src="js/qgis2web_expressions.js"></script>
         <script src="js/leaflet.js"></script>
         <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
         <script src="js/L.Control.Layers.Tree.min.js"></script>
@@ -128,7 +129,7 @@
         <script src="data/Parking_3.js"></script>
         <script src="data/Farm_4.js"></script>
         <script src="data/Field_5.js"></script>
-        
+        <script src="data/Flowers_6.js"></script>
         <script src="data/Amenity_7.js"></script>
         <script src="data/Buildings_8.js"></script>
         <script src="data/Trees_9.js"></script>
@@ -227,107 +228,86 @@
                 return null;
             }
             try {
+                var lookupKey = String(facilityId).trim();
+                if (!lookupKey) {
+                    return null;
+                }
                 var response = await supabaseClient
                     .from('bld_images')
-                    .select('facility_id,image_url,image,link')
-                    .eq('facility_id', facilityId)
-                    .single();
+                    .select('facility_id,new_bld_id,image_url,image,link')
+                    .or('facility_id.eq.' + lookupKey + ',new_bld_id.eq.' + lookupKey)
+                    .limit(1);
                 if (response.error) {
                     console.warn('Supabase image query error:', response.error);
                     return null;
                 }
-                var row = response.data || {};
+                var rows = response.data || [];
+                var row = Array.isArray(rows) ? rows[0] || {} : rows;
                 return row.image_url || row.image || row.link || null;
             } catch (error) {
                 console.warn('Failed to load facility image from Supabase:', error);
                 return null;
             }
         }
-
-        async function loadFacilityImages(facilityId) {
-            if (!supabaseClient || !facilityId) return { interior: null, exterior: null };
-            try {
-                var response = await supabaseClient
-                    .from('bld_images')
-                    .select('facility_id,interior_image_url,exterior_image_url')
-                    .eq('facility_id', facilityId)
-                    .single();
-                if (response.error) {
-                    console.warn('Supabase image query error:', response.error);
-                    return { interior: null, exterior: null };
-                }
-                var row = response.data || {};
-                return {
-                    interior: row.interior_image_url || null,
-                    exterior: row.exterior_image_url || null
-                };
-            } catch (error) {
-                console.warn('Failed to load facility images from Supabase:', error);
-                return { interior: null, exterior: null };
-            }
-        }
-
         async function addFacilityImageToPopup(feature, content, popup) {
             if (!feature || !feature.properties || !popup) return;
+
+            // Try direct photo fields on the feature first
             var props = feature.properties || {};
-            var isBuilding = !!(props.new_bld_id || props.new_bldid || props.newBldId);
-            var lookupKey = props.new_bld_id || props.new_bldid || props.newBldId || props.id || props.ID || props.facility_id || props.FACILITY_ID || null;
+            var possible = [];
+            if (props.Photo) possible.push(props.Photo);
+            if (props.photo) possible.push(props.photo);
+            if (props.image) possible.push(props.image);
+            if (props.image_url) possible.push(props.image_url);
 
-            function resolveLocal(value) {
-                if (!value) return null;
-                if (/^https?:\/\//i.test(value)) return value;
-                if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(value)) return 'images/' + value;
-                return null;
-            }
+            // If there's a new building id, prefer that as lookup key
+            var newBld = props.new_bld_id || props.new_bldid || props.newBldId;
+            if (newBld) possible.push(newBld);
 
-            function addCandidate(candidates, label, value) {
-                if (!value) return;
-                var url = resolveLocal(value);
-                if (url && candidates.indexOf(url) === -1) {
-                    candidates.push({label: label, url: url});
-                }
-            }
+            // Also try id-like fields
+            if (props.id) possible.push(props.id);
+            if (props.ID) possible.push(props.ID);
 
-            var images = [];
-            if (isBuilding && lookupKey) {
-                try {
-                    var row = await loadFacilityImages(lookupKey);
-                    addCandidate(images, 'Interior', row.interior);
-                    addCandidate(images, 'Exterior', row.exterior);
-                } catch (e) {
-                    console.warn('Failed loading building images:', e);
-                }
-            }
+            var imageUrl = null;
 
-            if (!isBuilding) {
-                addCandidate(images, 'Image', props.Photo);
-                addCandidate(images, 'Image', props.image);
-                addCandidate(images, 'Image', props.image_url);
-            }
-
-            if (images.length === 0 && lookupKey) {
-                try {
-                    var fallback = await loadFacilityImage(lookupKey);
-                    addCandidate(images, isBuilding ? 'Image' : 'Image', fallback);
-                } catch (e) {
-                    console.warn('Fallback image lookup failed:', e);
-                }
-            }
-
-            if (images.length === 0) return;
-
-            var html = images.map(function(item) {
-                return '<div style="margin-top:10px;text-align:center;">' +
-                    '<div style="font-size:12px;color:#666;margin-bottom:6px;">' + item.label + '</div>' +
-                    '<img src="' + item.url + '" alt="' + item.label + ' image" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
-                    '</div>';
-            }).join('');
-
+            // 1) If supabase is configured and we have a building key, try Supabase
             try {
-                popup.setContent(content + html);
+                var lookupKey = newBld || props.id || props.ID || null;
+                if (lookupKey && typeof supabaseClient !== 'undefined' && supabaseClient) {
+                    imageUrl = await loadFacilityImage(lookupKey);
+                }
+            } catch (e) {
+                console.warn('Supabase lookup failed silently:', e);
+            }
+
+            // 2) If no supabase image, check direct properties for a URL or filename
+            if (!imageUrl) {
+                for (var i = 0; i < possible.length; i++) {
+                    var v = possible[i];
+                    if (!v) continue;
+                    // If looks like a URL, use it
+                    if (/^https?:\/\//i.test(v)) {
+                        imageUrl = v;
+                        break;
+                    }
+                    // If looks like a filename, try images/ folder
+                    if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v) || /^[0-9A-Za-z_\-]+$/.test(v)) {
+                        imageUrl = 'images/' + v;
+                        break;
+                    }
+                }
+            }
+
+            if (!imageUrl) return;
+
+            var imgHtml = '<div style="margin-top:10px;text-align:center;">' +
+                          '<img src="' + imageUrl + '" alt="Facility image" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
+                          '</div>';
+            try {
+                popup.setContent(content + imgHtml);
                 popup.update();
             } catch (e) {
-                console.warn('Failed to attach popup images:', e);
+                console.warn('Failed to attach image to popup:', e);
             }
         }
         // Load issue markers from Firebase
@@ -339,15 +319,20 @@
                 issueMarkers.clearLayers();
                 snapshot.forEach(function(childSnapshot) {
                     var issue = childSnapshot.val();
+                    var lat = issue.location && issue.location.latitude ? issue.location.latitude : issue.lat || issue.latitude;
+                    var lng = issue.location && issue.location.longitude ? issue.location.longitude : issue.lng || issue.longitude;
+                    if (lat == null || lng == null) {
+                        return;
+                    }
                     var color = issue.status === 'new' ? 'red' : issue.status === 'in progress' ? 'orange' : 'green';
-                    var marker = L.circleMarker([issue.lat, issue.lng], {
+                    var marker = L.circleMarker([lat, lng], {
                         color: color,
                         fillColor: color,
                         fillOpacity: 0.8,
                         radius: 6,
                         weight: 2
                     }).addTo(issueMarkers);
-                    marker.bindPopup('<strong>Issue:</strong> ' + (issue.description || 'No description') + '<br><strong>Status:</strong> ' + (issue.status || 'Unknown'));
+                    marker.bindPopup('<strong>Issue:</strong> ' + (issue.summary || issue.details || issue.description || 'No description') + '<br><strong>Status:</strong> ' + (issue.status || 'Unknown'));
                 });
             });
         }
@@ -359,31 +344,51 @@
             if (heatmapVisible) {
                 if (heatLayer) {
                     map.removeLayer(heatLayer);
+                    heatLayer = null;
+                }
+                if (singleHeatMarker) {
+                    map.removeLayer(singleHeatMarker);
+                    singleHeatMarker = null;
                 }
                 heatmapVisible = false;
-            } else {
-                firebase.database().ref('locations').once('value', function(snapshot) {
-                    var points = [];
-                    snapshot.forEach(function(childSnapshot) {
-                        var loc = childSnapshot.val();
-                        if (loc.lat && loc.lng) {
-                            points.push([loc.lat, loc.lng]);
-                        }
-                    });
-                    if (points.length > 0) {
-                        if (points.length === 1) {
-                            // Single point: show a larger heat and a marker so it's visible
-                            heatLayer = L.heatLayer(points, {radius: 40, blur: 30, maxZoom: 18}).addTo(map);
-                            L.circleMarker(points[0], {radius: 12, color: '#ff5722', fillColor: '#ff8a50', fillOpacity:0.6}).addTo(map);
-                        } else {
-                            heatLayer = L.heatLayer(points, {radius: 25, blur: 15, maxZoom: 10}).addTo(map);
-                        }
-                        heatmapVisible = true;
-                    } else {
-                        alert('No device locations available for heatmap.');
+                return;
+            }
+            function renderHeatmap(points) {
+                if (!points.length) {
+                    alert('No device locations available for heatmap.');
+                    return;
+                }
+                if (points.length === 1) {
+                    heatLayer = L.heatLayer(points, {radius: 40, blur: 30, maxZoom: 18}).addTo(map);
+                    singleHeatMarker = L.circleMarker(points[0], {radius: 12, color: '#ff5722', fillColor: '#ff8a50', fillOpacity: 0.6}).addTo(map);
+                } else {
+                    heatLayer = L.heatLayer(points, {radius: 25, blur: 15, maxZoom: 10}).addTo(map);
+                }
+                heatmapVisible = true;
+            }
+            firebase.database().ref('deviceLocations').once('value', function(snapshot) {
+                var points = [];
+                snapshot.forEach(function(childSnapshot) {
+                    var loc = childSnapshot.val();
+                    if (loc && loc.latitude != null && loc.longitude != null) {
+                        points.push([loc.latitude, loc.longitude]);
                     }
                 });
-            }
+                if (points.length) {
+                    renderHeatmap(points);
+                } else {
+                    firebase.database().ref('locations').once('value', function(snapshot) {
+                        var fallbackPoints = [];
+                        snapshot.forEach(function(childSnapshot) {
+                            var loc = childSnapshot.val();
+                            if (loc && loc.lat != null && loc.lng != null) {
+                                fallbackPoints.push([loc.lat, loc.lng]);
+                            }
+                        });
+                        renderHeatmap(fallbackPoints);
+                    });
+                }
+            });
         }
         var title = new L.Control({'position':'topright'});
         title.onAdd = function (map) {
@@ -399,6 +404,7 @@
         var issueMarkers = L.layerGroup().addTo(map);
         // Heatmap control
         var heatLayer;
+        var singleHeatMarker;
         var heatmapVisible = false;
         var heatmapControl = L.control({position: 'topright'});
         heatmapControl.onAdd = function(map) {
@@ -887,8 +893,8 @@
                 lineJoin: 'miter',
                 weight: 1.0, 
                 fill: true,
-                fillOpacity: 0.65,
-                fillColor: 'rgba(180,180,180,0.8)',
+                fillOpacity: 1,
+                fillColor: 'rgba(250,249,251,1.0)',
                 interactive: true,
             }
         }
@@ -1564,7 +1570,10 @@
                 summary: summary,
                 details: details,
                 location: location || null,
-                browser: navigator.userAgent
+                lat: location && location.latitude != null ? location.latitude : null,
+                lng: location && location.longitude != null ? location.longitude : null,
+                browser: navigator.userAgent,
+                status: 'new'
             };
             function writeIssue(imageUrl) {
                 if (imageUrl) {

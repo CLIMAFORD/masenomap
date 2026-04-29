@@ -82,6 +82,25 @@
         .heatmap-control a:hover {
             background-color: #f4f4f4;
         }
+        .report-issue-btn {
+            position: fixed;
+            right: 14px;
+            bottom: 14px;
+            z-index: 10002;
+            background: #e91e63;
+            color: #fff;
+            border: none;
+            padding: 12px 16px;
+            border-radius: 28px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .report-issue-btn:hover {
+            background: #d81b60;
+        }
         .search-nav-btn {
             border: 1px solid rgba(0,0,0,0.15);
             background: rgba(255,255,255,0.95);
@@ -102,6 +121,7 @@
     <body>
         <div id="map">
         </div>
+        <button id="report-issue-always-visible" class="report-issue-btn" onclick="openReportPanel()" title="Report issue">Report issue</button>
         <script src="js/qgis2web_expressions.js"></script>
         <script src="js/leaflet.js"></script>
         <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>

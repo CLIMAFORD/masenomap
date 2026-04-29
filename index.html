@@ -244,7 +244,7 @@
         }
 
         async function loadFacilityImages(facilityId, isBuilding) {
-            if (!supabaseClient || !facilityId) {
+            if (!supabaseClient || !facilityId || !isBuilding) {
                 return null;
             }
             try {
@@ -254,8 +254,8 @@
                 }
                 var response = await supabaseClient
                     .from('bld_images')
-                    .select('facility_id,new_bld_id,facility_image,facility_image_url,exterior_image,exterior_image_url,interior_image,interior_image_url,image_url,image,link')
-                    .eq(isBuilding ? 'new_bld_id' : 'facility_id', lookupKey)
+                    .select('building_name,exterior_image_url,interior_image_url,new_bld_id')
+                    .eq('new_bld_id', lookupKey)
                     .limit(1);
                 if (response.error) {
                     console.warn('Supabase image query error:', response.error);
@@ -300,14 +300,14 @@
         }
 
         async function getSupabaseImageRow(facilityId, isBuilding) {
-            if (!supabaseClient || !facilityId) return null;
+            if (!supabaseClient || !facilityId || !isBuilding) return null;
             try {
                 var lookupKey = String(facilityId).trim();
                 if (!lookupKey) return null;
                 var response = await supabaseClient
                     .from('bld_images')
-                    .select('facility_id,new_bld_id,facility_image,facility_image_url,exterior_image,exterior_image_url,interior_image,interior_image_url,image_url,image,link')
-                    .eq(isBuilding ? 'new_bld_id' : 'facility_id', lookupKey)
+                    .select('building_name,exterior_image_url,interior_image_url,new_bld_id')
+                    .eq('new_bld_id', lookupKey)
                     .limit(1);
                 if (response.error) {
                     console.warn('Supabase image query error:', response.error);
@@ -325,15 +325,11 @@
             if (!row) return null;
             if (isBuilding) {
                 if (type === 'exterior') {
-                    return normalizeImageUrl(row.exterior_image_url || row.exterior_image);
+                    return normalizeImageUrl(row.exterior_image_url);
                 }
                 if (type === 'interior') {
-                    return normalizeImageUrl(row.interior_image_url || row.interior_image);
+                    return normalizeImageUrl(row.interior_image_url);
                 }
-                return normalizeImageUrl(row.facility_image_url || row.facility_image || row.image_url || row.image || row.link);
-            }
-            if (type === 'facility') {
-                return normalizeImageUrl(row.facility_image_url || row.facility_image || row.image_url || row.image || row.link);
             }
             return null;
         }

@@ -1694,21 +1694,25 @@
             document.body.appendChild(b);
         }
 
-        // If the report control is not visible (some CSS may hide it), add a fallback floating button
+        // Ensure the report control is visible; if it is hidden or doesn't render, add a fixed fallback button.
         function ensureReportButtonVisible() {
-            // small delay to allow regular control to render
             setTimeout(function() {
+                if (document.getElementById('report-fallback-btn')) return;
                 var existing = document.querySelector('.report-issue-control');
-                if (!existing || existing.getBoundingClientRect().width === 0) {
-                    if (document.getElementById('report-fallback-btn')) return;
+                var shouldShowFallback = true;
+                if (existing) {
+                    var rect = existing.getBoundingClientRect();
+                    shouldShowFallback = rect.width === 0 || rect.height === 0 || existing.style.display === 'none' || existing.style.visibility === 'hidden';
+                }
+                if (shouldShowFallback) {
                     var fb = document.createElement('button');
                     fb.id = 'report-fallback-btn';
-                    fb.textContent = 'Report';
+                    fb.textContent = 'Report issue';
                     fb.title = 'Report issue';
                     fb.style.position = 'fixed';
                     fb.style.right = '14px';
                     fb.style.bottom = '14px';
-                    fb.style.zIndex = 10000;
+                    fb.style.zIndex = 10001;
                     fb.style.background = '#e91e63';
                     fb.style.color = '#fff';
                     fb.style.border = 'none';
@@ -1716,6 +1720,9 @@
                     fb.style.borderRadius = '28px';
                     fb.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
                     fb.style.cursor = 'pointer';
+                    fb.style.fontSize = '14px';
+                    fb.style.fontWeight = '600';
+                    fb.style.letterSpacing = '0.02em';
                     fb.addEventListener('click', function() { openReportPanel(); });
                     document.body.appendChild(fb);
                 }

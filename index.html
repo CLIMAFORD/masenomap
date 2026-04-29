@@ -243,7 +243,7 @@
             });
         }
 
-        async function loadFacilityImage(facilityId) {
+        async function loadFacilityImages(facilityId, isBuilding) {
             if (!supabaseClient || !facilityId) {
                 return null;
             }
@@ -254,77 +254,101 @@
                 }
                 var response = await supabaseClient
                     .from('bld_images')
-                    .select('facility_id,new_bld_id,image_url,image,link')
-                    .or('facility_id.eq.' + lookupKey + ',new_bld_id.eq.' + lookupKey)
+                    .select('facility_id,new_bld_id,facility_image,facility_image_url,exterior_image,exterior_image_url,interior_image,interior_image_url,image_url,image,link')
+                    .eq(isBuilding ? 'new_bld_id' : 'facility_id', lookupKey)
                     .limit(1);
                 if (response.error) {
                     console.warn('Supabase image query error:', response.error);
                     return null;
                 }
                 var rows = response.data || [];
-                var row = Array.isArray(rows) ? rows[0] || {} : rows;
-                return row.image_url || row.image || row.link || null;
+                return Array.isArray(rows) ? rows[0] || null : rows;
             } catch (error) {
-                console.warn('Failed to load facility image from Supabase:', error);
+                console.warn('Failed to load facility images from Supabase:', error);
                 return null;
             }
         }
+
+        function normalizeImageUrl(value) {
+            if (!value) {
+                return null;
+            }
+            var url = String(value).trim();
+            if (!url) {
+                return null;
+            }
+            if (/^https?:\/\//i.test(url) || /^\/\//.test(url)) {
+                return url;
+            }
+            if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(url)) {
+                return 'images/' + url;
+            }
+            return url;
+        }
+
+        function renderImageSection(label, imageUrl) {
+            return '<div style="margin-top:10px;text-align:center;">' +
+                   '<div style="font-size:12px;color:#555;margin-bottom:6px;">' + label + '</div>' +
+                   '<img src="' + imageUrl + '" alt="' + label + '" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
+                   '</div>';
+        }
+
+        function renderPlaceholderSection() {
+            return '<div style="margin-top:10px;text-align:center;color:#666;font-size:13px;">' +
+                   '<div style="width:100%;height:180px;border:1px solid #ddd;background:#f5f5f5;display:flex;align-items:center;justify-content:center;border-radius:8px;">No image available</div>' +
+                   '</div>';
+        }
+
         async function addFacilityImageToPopup(feature, content, popup) {
             if (!feature || !feature.properties || !popup) return;
-
-            // Try direct photo fields on the feature first
             var props = feature.properties || {};
-            var possible = [];
-            if (props.Photo) possible.push(props.Photo);
-            if (props.photo) possible.push(props.photo);
-            if (props.image) possible.push(props.image);
-            if (props.image_url) possible.push(props.image_url);
-
-            // If there's a new building id, prefer that as lookup key
             var newBld = props.new_bld_id || props.new_bldid || props.newBldId;
-            if (newBld) possible.push(newBld);
+            var facilityId = newBld || props.facility_id || props.facilityId || props.id || props.ID;
+            var isBuilding = !!newBld;
+            var imageHtml = '';
 
-            // Also try id-like fields
-            if (props.id) possible.push(props.id);
-            if (props.ID) possible.push(props.ID);
-
-            var imageUrl = null;
-
-            // 1) If supabase is configured and we have a building key, try Supabase
-            try {
-                var lookupKey = newBld || props.id || props.ID || null;
-                if (lookupKey && typeof supabaseClient !== 'undefined' && supabaseClient) {
-                    imageUrl = await loadFacilityImage(lookupKey);
-                }
-            } catch (e) {
-                console.warn('Supabase lookup failed silently:', e);
-            }
-
-            // 2) If no supabase image, check direct properties for a URL or filename
-            if (!imageUrl) {
-                for (var i = 0; i < possible.length; i++) {
-                    var v = possible[i];
-                    if (!v) continue;
-                    // If looks like a URL, use it
-                    if (/^https?:\/\//i.test(v)) {
-                        imageUrl = v;
-                        break;
+            if (facilityId && typeof supabaseClient !== 'undefined' && supabaseClient) {
+                try {
+                    var row = await loadFacilityImages(facilityId, isBuilding);
+                    if (row) {
+                        if (isBuilding) {
+                            var exteriorUrl = normalizeImageUrl(row.exterior_image_url || row.exterior_image);
+                            var interiorUrl = normalizeImageUrl(row.interior_image_url || row.interior_image);
+                            var fallbackUrl = normalizeImageUrl(row.facility_image_url || row.facility_image || row.image_url || row.image || row.link);
+                            if (exteriorUrl) {
+                                imageHtml += renderImageSection('Exterior image', exteriorUrl);
+                            }
+                            if (interiorUrl) {
+                                imageHtml += renderImageSection('Interior image', interiorUrl);
+                            }
+                            if (!imageHtml && fallbackUrl) {
+                                imageHtml += renderImageSection('Building image', fallbackUrl);
+                            }
+                        } else {
+                            var facilityUrl = normalizeImageUrl(row.facility_image_url || row.facility_image || row.image_url || row.image || row.link);
+                            if (facilityUrl) {
+                                imageHtml += renderImageSection('Facility image', facilityUrl);
+                            }
+                        }
                     }
-                    // If looks like a filename, try images/ folder
-                    if (/\.(jpg|jpeg|png|gif|webp|avif)$/i.test(v) || /^[0-9A-Za-z_\-]+$/.test(v)) {
-                        imageUrl = 'images/' + v;
-                        break;
-                    }
+                } catch (e) {
+                    console.warn('Supabase lookup failed silently:', e);
                 }
             }
 
-            if (!imageUrl) return;
+            if (!imageHtml) {
+                var directUrl = normalizeImageUrl(props.Photo || props.photo || props.image || props.image_url || props.facility_image || props.facility_image_url);
+                if (directUrl) {
+                    imageHtml = renderImageSection(isBuilding ? 'Building image' : 'Facility image', directUrl);
+                }
+            }
 
-            var imgHtml = '<div style="margin-top:10px;text-align:center;">' +
-                          '<img src="' + imageUrl + '" alt="Facility image" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid #ddd;" />' +
-                          '</div>';
+            if (!imageHtml) {
+                imageHtml = renderPlaceholderSection();
+            }
+
             try {
-                popup.setContent(content + imgHtml);
+                popup.setContent(content + imageHtml);
                 popup.update();
             } catch (e) {
                 console.warn('Failed to attach image to popup:', e);

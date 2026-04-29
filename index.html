@@ -226,6 +226,9 @@
         var supabaseClient = null;
 
         function initSupabase() {
+            if (supabaseClient) {
+                return;
+            }
             if (typeof supabase === 'undefined') {
                 console.warn('Supabase SDK not loaded.');
                 return;
@@ -1490,7 +1493,7 @@
             try {
                 firebaseApp = firebase.initializeApp(firebaseConfig);
                 firebaseDatabase = firebase.database();
-                firebaseStorage = firebase.storage ? firebase.storage() : null;
+                firebaseStorage = null;
                 initSupabase();
                 startLocationUpdates();
                 createReportControl();
@@ -1667,15 +1670,34 @@
                     document.getElementById('report-submit').disabled = false;
                 });
             }
-            if (imageFile && firebaseStorage) {
-                var storagePath = 'issueImages/' + issueRef.key + '/' + imageFile.name;
+
+            function uploadIssueImage(storagePath, imageFile) {
+                if (!firebaseStorage && firebase.storage) {
+                    firebaseStorage = firebase.storage();
+                }
+                if (!firebaseStorage) {
+                    return Promise.reject(new Error('Firebase Storage is unavailable.'));
+                }
                 var storageRef = firebaseStorage.ref(storagePath);
-                storageRef.put(imageFile).then(function(snapshot) {
+                return storageRef.put(imageFile, { contentType: imageFile.type }).catch(function(error) {
+                    console.warn('Primary Firebase storage upload failed:', error);
+                    try {
+                        var fallbackRef = firebaseStorage.refFromURL('gs://masenomap.appspot.com/' + storagePath);
+                        return fallbackRef.put(imageFile, { contentType: imageFile.type });
+                    } catch (fallbackError) {
+                        return Promise.reject(fallbackError || error);
+                    }
+                }).then(function(snapshot) {
                     return snapshot.ref.getDownloadURL();
-                }).then(function(downloadURL) {
+                });
+            }
+
+            if (imageFile) {
+                var storagePath = 'issueImages/' + issueRef.key + '/' + imageFile.name;
+                uploadIssueImage(storagePath, imageFile).then(function(downloadURL) {
                     writeIssue(downloadURL);
                 }).catch(function(error) {
-                    console.warn('Failed to upload issue image:', error);
+                    console.warn('Issue image upload failed; saving report without image:', error);
                     writeIssue(null);
                 });
             } else {
@@ -1805,7 +1827,6 @@
 
         initFirebase();
         loadIssues();
-        initSupabase();
         // Ensure location prompt and report button are visible
         ensureLocationPermissionUI();
         ensureReportButtonVisible();

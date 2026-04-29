@@ -246,19 +246,23 @@
             });
         }
 
-        async function loadFacilityImages(facilityId, isBuilding) {
-            if (!supabaseClient || !facilityId || !isBuilding) {
-                return null;
-            }
+        function parseFacilityLookupValue(value) {
+            if (value == null) return null;
+            var trimmed = String(value).trim();
+            if (!trimmed) return null;
+            var num = Number(trimmed);
+            return Number.isFinite(num) ? num : trimmed;
+        }
+
+        async function getSupabaseImageRow(facilityId) {
+            if (!supabaseClient || !facilityId) return null;
             try {
-                var lookupKey = String(facilityId).trim();
-                if (!lookupKey) {
-                    return null;
-                }
+                var lookupValue = parseFacilityLookupValue(facilityId);
+                if (lookupValue == null) return null;
                 var response = await supabaseClient
                     .from('bld_images')
                     .select('building_name,exterior_image_url,interior_image_url,new_bld_id')
-                    .eq('new_bld_id', lookupKey)
+                    .eq('new_bld_id', lookupValue)
                     .limit(1);
                 if (response.error) {
                     console.warn('Supabase image query error:', response.error);
@@ -302,30 +306,11 @@
                    '</div>';
         }
 
-        async function getSupabaseImageRow(facilityId, isBuilding) {
-            if (!supabaseClient || !facilityId || !isBuilding) return null;
-            try {
-                var lookupKey = String(facilityId).trim();
-                if (!lookupKey) return null;
-                var response = await supabaseClient
-                    .from('bld_images')
-                    .select('building_name,exterior_image_url,interior_image_url,new_bld_id')
-                    .eq('new_bld_id', lookupKey)
-                    .limit(1);
-                if (response.error) {
-                    console.warn('Supabase image query error:', response.error);
-                    return null;
-                }
-                var rows = response.data || [];
-                return Array.isArray(rows) ? rows[0] || null : rows;
-            } catch (error) {
-                console.warn('Failed to load facility images from Supabase:', error);
-                return null;
-            }
-        }
-
         function getImageUrlForType(row, type, isBuilding) {
             if (!row) return null;
+            if (type === 'facility') {
+                return normalizeImageUrl(row.exterior_image_url || row.interior_image_url || row.photo_url || row.image_url);
+            }
             if (isBuilding) {
                 if (type === 'exterior') {
                     return normalizeImageUrl(row.exterior_image_url);
@@ -363,29 +348,46 @@
             if (!facilityId || !supabaseClient) return;
 
             var currentRow = null;
+            var imageArea = document.getElementById(imageAreaId);
+
+            async function updateImageArea(type) {
+                if (!currentRow) {
+                    currentRow = await getSupabaseImageRow(facilityId);
+                }
+                var imageUrl = getImageUrlForType(currentRow, type, isBuilding);
+                if (!imageArea) {
+                    imageArea = document.getElementById(imageAreaId);
+                }
+                if (imageArea) {
+                    if (imageUrl) {
+                        imageArea.innerHTML = renderImageSection(type === 'facility' ? 'Facility image' : (type === 'exterior' ? 'Exterior image' : 'Interior image'), imageUrl);
+                    } else {
+                        imageArea.innerHTML = '<div style="margin-top:10px;text-align:center;color:#666;font-size:13px;">No ' + (type === 'facility' ? 'facility' : type) + ' image available.</div>';
+                    }
+                }
+                popup.update();
+            }
+
             var attachHandlers = function() {
-                var buttons = popup._contentNode.querySelectorAll('.facility-image-option');
+                var buttons = popup._contentNode ? popup._contentNode.querySelectorAll('.facility-image-option') : [];
                 buttons.forEach(function(button) {
                     button.addEventListener('click', async function(event) {
                         var type = event.currentTarget.getAttribute('data-image-type');
                         if (!type) return;
-                        if (!currentRow) {
-                            currentRow = await getSupabaseImageRow(facilityId, isBuilding);
-                        }
-                        var imageUrl = getImageUrlForType(currentRow, type, isBuilding);
-                        var imageArea = document.getElementById(imageAreaId);
-                        if (imageArea) {
-                            if (imageUrl) {
-                                imageArea.innerHTML = renderImageSection(type === 'facility' ? 'Facility image' : (type === 'exterior' ? 'Exterior image' : 'Interior image'), imageUrl);
-                            } else {
-                                imageArea.innerHTML = '<div style="margin-top:10px;text-align:center;color:#666;font-size:13px;">No ' + (type === 'facility' ? 'facility' : type) + ' image available.</div>';
-                            }
-                        }
-                        popup.update();
+                        await updateImageArea(type);
                     });
                 });
             };
-            setTimeout(attachHandlers, 100);
+
+            // Attach handlers after DOM is ready and automatically load the first available image.
+            requestAnimationFrame(function() {
+                attachHandlers();
+                if (isBuilding) {
+                    updateImageArea('exterior');
+                } else {
+                    updateImageArea('facility');
+                }
+            });
         }
         // Load issue markers from Firebase
         function loadIssues() {

@@ -15,6 +15,3 @@ npm-debug.log
 # Backup files
 *.bak
 *~
-
-# Local Supabase config
-js/supabaseConfig.js

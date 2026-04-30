@@ -251,6 +251,7 @@
                 var url = new URL(SUPABASE_URL + '/rest/v1/bld_images');
                 url.searchParams.set('select', 'building_name,exterior_image_url,interior_image_url,new_bld_id');
                 url.searchParams.set('new_bld_id', 'eq.' + lookupValue);
+                try { console.debug('[Supabase] REST URL ->', url.toString()); } catch(e) {}
                 var response = await fetch(url.toString(), {
                     method: 'GET',
                     headers: {
@@ -266,6 +267,7 @@
                     return null;
                 }
                 var rows = await response.json();
+                try { console.debug('[Supabase] rows ->', rows); } catch(e) {}
                 return Array.isArray(rows) ? rows[0] || null : rows;
             } catch (error) {
                 console.warn('Failed to load facility images from Supabase:', error);
@@ -319,6 +321,40 @@
             return null;
         }
 
+        // Try to load image URLs sequentially. Calls `onSuccess(url)` when an URL loads.
+        function tryLoadImage(urls, onSuccess, onFailure) {
+            if (!Array.isArray(urls) || urls.length === 0) {
+                if (onFailure) onFailure();
+                return;
+            }
+            var idx = 0;
+            function attempt() {
+                if (idx >= urls.length) {
+                    if (onFailure) onFailure();
+                    return;
+                }
+                var u = urls[idx++];
+                if (!u) return attempt();
+                try {
+                    var img = new Image();
+                    // avoid tainting unless necessary
+                    img.crossOrigin = 'anonymous';
+                    img.onload = function() {
+                        onSuccess(u);
+                    };
+                    img.onerror = function() {
+                        console.debug('[Image load] failed for', u);
+                        attempt();
+                    };
+                    img.src = u;
+                } catch (e) {
+                    console.warn('Image load attempt error:', e);
+                    attempt();
+                }
+            }
+            attempt();
+        }
+
         function renderImageButtons(isBuilding) {
             if (isBuilding) {
                 return '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;">' +
@@ -349,15 +385,39 @@
 
             async function updateImageArea(type) {
                 if (!currentRow) {
+                    try { console.debug('[Popup] requesting images for facilityId ->', facilityId); } catch(e) {}
                     currentRow = await getSupabaseImageRow(facilityId);
                 }
                 var imageUrl = getImageUrlForType(currentRow, type, isBuilding);
+                try { console.debug('[Popup] selected imageUrl ->', imageUrl, ' type ->', type); } catch(e) {}
                 if (!imageArea) {
                     imageArea = document.getElementById(imageAreaId);
                 }
                 if (imageArea) {
                     if (imageUrl) {
-                        imageArea.innerHTML = renderImageSection(type === 'facility' ? 'Facility image' : (type === 'exterior' ? 'Exterior image' : 'Interior image'), imageUrl);
+                        // Build fallback candidate URLs to try if the primary URL doesn't load.
+                        var candidates = [imageUrl];
+                        // If value looks like a storage path (no scheme) try Supabase public storage URL.
+                        try {
+                            var asUrl = /^https?:\/\//i.test(String(imageUrl));
+                            if (!asUrl && typeof SUPABASE_URL !== 'undefined' && typeof SUPABASE_BUCKET !== 'undefined') {
+                                // trim leading slashes
+                                var p = String(imageUrl).replace(/^\/*/, '');
+                                var storageUrl = SUPABASE_URL.replace(/\/$/, '') + '/storage/v1/object/public/' + SUPABASE_BUCKET + '/' + encodeURIComponent(p);
+                                candidates.push(storageUrl);
+                            }
+                        } catch (e) {
+                            // ignore
+                        }
+
+                        tryLoadImage(candidates, function(workingUrl) {
+                            imageArea.innerHTML = renderImageSection(type === 'facility' ? 'Facility image' : (type === 'exterior' ? 'Exterior image' : 'Interior image'), workingUrl);
+                            popup.update();
+                        }, function() {
+                            imageArea.innerHTML = '<div style="margin-top:10px;text-align:center;color:#666;font-size:13px;">No ' + (type === 'facility' ? 'facility' : type) + ' image available.</div>';
+                            popup.update();
+                        });
+                        // bail — handlers will update the DOM
                     } else {
                         imageArea.innerHTML = '<div style="margin-top:10px;text-align:center;color:#666;font-size:13px;">No ' + (type === 'facility' ? 'facility' : type) + ' image available.</div>';
                     }

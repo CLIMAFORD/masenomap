@@ -138,7 +138,6 @@
         <script src="js/leaflet-measure.js"></script>
         <script src="js/leaflet-heat.js"></script>
         <script src="js/leaflet-search.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
         <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
         <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
@@ -223,27 +222,17 @@
             }
         }
 
-        var supabaseClient = null;
+        var supabaseSupported = false;
 
         function initSupabase() {
-            if (supabaseClient) {
+            if (supabaseSupported) {
                 return;
             }
-            if (typeof supabase === 'undefined') {
-                console.warn('Supabase SDK not loaded.');
-                return;
-            }
+            supabaseSupported = true;
             if (!SUPABASE_URL || !SUPABASE_ANON_KEY || SUPABASE_URL.includes('YOUR_PROJECT_REF') || SUPABASE_ANON_KEY.includes('YOUR_ANON_KEY')) {
                 console.warn('Supabase credentials are not configured.');
-                return;
+                supabaseSupported = false;
             }
-            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-                auth: {
-                    persistSession: false,
-                    detectSessionInUrl: false,
-                    storage: null
-                }
-            });
         }
 
         function parseFacilityLookupValue(value) {
@@ -255,20 +244,28 @@
         }
 
         async function getSupabaseImageRow(facilityId) {
-            if (!supabaseClient || !facilityId) return null;
+            if (!supabaseSupported || !facilityId) return null;
             try {
                 var lookupValue = parseFacilityLookupValue(facilityId);
                 if (lookupValue == null) return null;
-                var response = await supabaseClient
-                    .from('bld_images')
-                    .select('building_name,exterior_image_url,interior_image_url,new_bld_id')
-                    .eq('new_bld_id', lookupValue)
-                    .limit(1);
-                if (response.error) {
-                    console.warn('Supabase image query error:', response.error);
+                var url = new URL(SUPABASE_URL + '/rest/v1/bld_images');
+                url.searchParams.set('select', 'building_name,exterior_image_url,interior_image_url,new_bld_id');
+                url.searchParams.set('new_bld_id', 'eq.' + lookupValue);
+                var response = await fetch(url.toString(), {
+                    method: 'GET',
+                    headers: {
+                        'apikey': SUPABASE_ANON_KEY,
+                        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+                        'Accept': 'application/json'
+                    },
+                    cache: 'no-cache'
+                });
+                if (!response.ok) {
+                    var errorText = await response.text();
+                    console.warn('Supabase REST query failed:', response.status, errorText);
                     return null;
                 }
-                var rows = response.data || [];
+                var rows = await response.json();
                 return Array.isArray(rows) ? rows[0] || null : rows;
             } catch (error) {
                 console.warn('Failed to load facility images from Supabase:', error);
@@ -345,7 +342,7 @@
             var popupContent = content + buttonHtml + '<div id="' + imageAreaId + '">' + renderPlaceholderSection() + '</div>';
             popup.setContent(popupContent);
             popup.update();
-            if (!facilityId || !supabaseClient) return;
+            if (!facilityId || !supabaseSupported) return;
 
             var currentRow = null;
             var imageArea = document.getElementById(imageAreaId);
@@ -1481,11 +1478,42 @@
         var firebaseDatabase = null;
         var firebaseStorage = null;
         var selectedReportImageFile = null;
-        var masenoMapDeviceId = localStorage.getItem('masenomapDeviceId');
-        if (!masenoMapDeviceId) {
-            masenoMapDeviceId = 'device-' + Math.random().toString(36).slice(2, 12) + '-' + Date.now();
-            localStorage.setItem('masenomapDeviceId', masenoMapDeviceId);
+        var masenoMapDeviceId = null;
+        var masenoMapDeviceIdFallback = null;
+
+        function safeLocalStorageGet(key) {
+            try {
+                if (typeof localStorage === 'undefined') return null;
+                return localStorage.getItem(key);
+            } catch (error) {
+                return null;
+            }
         }
+
+        function safeLocalStorageSet(key, value) {
+            try {
+                if (typeof localStorage === 'undefined') return;
+                localStorage.setItem(key, value);
+            } catch (error) {
+                // Tracking prevention or storage access denied.
+            }
+        }
+
+        function getDeviceId() {
+            if (masenoMapDeviceId) {
+                return masenoMapDeviceId;
+            }
+            var stored = safeLocalStorageGet('masenomapDeviceId');
+            if (stored) {
+                masenoMapDeviceId = stored;
+                return masenoMapDeviceId;
+            }
+            masenoMapDeviceId = 'device-' + Math.random().toString(36).slice(2, 12) + '-' + Date.now();
+            safeLocalStorageSet('masenomapDeviceId', masenoMapDeviceId);
+            return masenoMapDeviceId;
+        }
+
+        masenoMapDeviceId = getDeviceId();
 
         function initFirebase() {
             if (typeof firebase === 'undefined' || typeof firebaseConfig === 'undefined') {
